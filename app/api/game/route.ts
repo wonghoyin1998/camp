@@ -58,9 +58,17 @@ export async function POST(request: Request) {
       return response(authenticatedRead.state, authenticatedRead.revision, { teamPins: nextPins });
     }
 
+    // Chat identity is derived from the verified credential, never trusted from
+    // browser-provided sender fields.
+    const mutationPayload = action === "sendChatMessage"
+      ? body.pin === gmPin
+        ? { ...payload, senderRole: "gm", senderTeamId: undefined }
+        : { ...payload, senderRole: "team", senderTeamId: payload.teamId }
+      : payload;
+
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const { state, revision } = await readState();
-      const next = mutateGame(state, action, payload);
+      const next = mutateGame(state, action, mutationPayload);
       if (await compareAndSwapState(next, revision)) return response(next, revision + 1);
     }
     return Response.json({ error: "另一隊剛剛更新了遊戲，請再試一次。" }, { status: 409 });

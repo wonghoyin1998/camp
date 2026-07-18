@@ -120,7 +120,10 @@ function findTeamResolution(previous: GameState, current: GameState, teamId: Tea
     const before = previous.taskRuns.find((item) => item.id === run.id);
     if (before?.status === "submitted" && run.status !== "submitted") {
       const task = AFTERNOON_TASKS.find((item) => item.id === run.taskId);
-      return { tone: run.status === "completed" ? "good" : "bad", text: run.status === "completed" ? `GM 已確認 ${run.taskId}「${task?.title ?? "任務"}」，獎勵已入帳` : run.status === "started" ? `GM 退回 ${run.taskId}，並已使用重試機會` : `GM 退回 ${run.taskId}，可以重新挑戰` } as const;
+      const completedText = run.taskId === "C5"
+        ? `GM 已確認 C5「三隊拼船單」，資源已扣除；$${run.jointSettlementValue ?? 0} 將於遊戲結束時結算`
+        : `GM 已確認 ${run.taskId}「${task?.title ?? "任務"}」，獎勵已入帳`;
+      return { tone: run.status === "completed" ? "good" : "bad", text: run.status === "completed" ? completedText : run.status === "started" ? `GM 退回 ${run.taskId}，並已使用重試機會` : `GM 退回 ${run.taskId}，可以重新挑戰` } as const;
     }
   }
   if (previous.tasksOpen && !current.tasksOpen && current.phase === "route") return { tone: "bad", text: "GM 已停止下午任務；未提交挑戰不能再交" } as const;
@@ -209,7 +212,7 @@ export default function GameClient() {
       const data = (await response.json()) as { state?: GameState; error?: string };
       if (!response.ok || !data.state) throw new Error(data.error ?? "操作失敗");
       setState(data.state);
-      setToast({ text: "操作完成", tone: "good" });
+      if (action !== "sendChatMessage") setToast({ text: "操作完成", tone: "good" });
       return true;
     } catch (error) {
       setToast({ text: error instanceof Error ? error.message : "操作失敗", tone: "bad" });
@@ -296,20 +299,33 @@ const TEAM_NAV = [
   { id: "market", label: "市場", icon: "▾" },
   { id: "trades", label: "交易", icon: "⇄" },
   { id: "projects", label: "項目", icon: "▣" },
+  { id: "chat", label: "聊天室", icon: "✉" },
 ] as const;
 
 function TeamDashboard({ state, teamId, busy, act, onLogout }: { state: GameState; teamId: TeamId; busy: boolean; act: ActionFn; onLogout: () => void }) {
   const [view, setView] = useState<(typeof TEAM_NAV)[number]["id"]>("map");
   const [selectedTask, setSelectedTask] = useState<TaskDefinition | null>(null);
   const [editingName, setEditingName] = useState(false);
+  const chatMessages = state.chatMessages ?? [];
+  const latestChatId = chatMessages[chatMessages.length - 1]?.id ?? "";
+  const [lastReadChatId, setLastReadChatId] = useState(latestChatId);
+  const lastReadChatIndex = chatMessages.findIndex((message) => message.id === lastReadChatId);
+  const unreadChatCount = view === "chat" ? 0 : chatMessages
+    .slice(lastReadChatIndex >= 0 ? lastReadChatIndex + 1 : 0)
+    .filter((message) => message.senderRole === "gm" || message.senderTeamId !== teamId)
+    .length;
   const team = state.teams[teamId];
+  const selectView = (nextView: (typeof TEAM_NAV)[number]["id"]) => {
+    if (view === "chat" || nextView === "chat") setLastReadChatId(latestChatId);
+    setView(nextView);
+  };
 
   return (
     <main className="app-shell" style={{ "--team": TEAMS[teamId].color } as React.CSSProperties}>
       <aside className="sidebar">
         <div className="side-brand"><span className="train-mark">➤</span><b>棋航者</b><small>最後登船令</small></div>
         <nav>
-          {TEAM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><span>{item.icon}</span>{item.label}</button>)}
+          {TEAM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><span>{item.icon}</span>{item.label}{item.id === "chat" && unreadChatCount > 0 && <i>{Math.min(unreadChatCount, 99)}</i>}</button>)}
         </nav>
         <div className="one-way-note"><b>⟳ 跨區鎖定</b><span>同區可回頭；進入下一區後不可返回上一區</span></div>
         <button className="logout-link" onClick={onLogout}>切換登入</button>
@@ -328,10 +344,11 @@ function TeamDashboard({ state, teamId, busy, act, onLogout }: { state: GameStat
         {view === "market" && <MarketView state={state} teamId={teamId} busy={busy} act={act} />}
         {view === "trades" && <TradesView state={state} teamId={teamId} busy={busy} act={act} />}
         {view === "projects" && <ProjectsView state={state} teamId={teamId} busy={busy} act={act} />}
+        {view === "chat" && <ChatRoom state={state} actor={{ role: "team", teamId }} busy={busy} act={act} />}
       </section>
 
       <nav className="mobile-nav">
-        {TEAM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><span>{item.icon}</span>{item.label}</button>)}
+        {TEAM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><span>{item.icon}</span>{item.label}{item.id === "chat" && unreadChatCount > 0 && <i>{Math.min(unreadChatCount, 99)}</i>}</button>)}
       </nav>
 
       {selectedTask && <TaskModal task={selectedTask} state={state} teamId={teamId} busy={busy} act={act} onClose={() => setSelectedTask(null)} />}
@@ -357,6 +374,67 @@ function TeamNameEditor({ state, teamId, busy, act, onClose }: { state: GameStat
       <div><small>TEAM IDENTITY</small><h1 id="team-name-title">修改組名</h1><p>只會改顯示名稱；隊色及登入碼保持不變。</p></div>
       <label>新組名<input autoFocus value={name} onChange={(event) => setName(Array.from(event.target.value).slice(0, 12).join(""))} onKeyDown={(event) => { if (event.key === "Enter" && length > 0 && trimmedName !== currentName && !busy) void save(); }} placeholder="輸入 1–12 個字" /></label>
       <div className="team-name-actions"><span>{length}/12</span><button onClick={onClose}>取消</button><button className="save" disabled={busy || length < 1 || length > 12 || trimmedName === currentName} onClick={() => void save()}>{busy ? "儲存中…" : "確認改名"}</button></div>
+    </section>
+  </div>;
+}
+
+function ChatRoom({ state, actor, busy, act }: {
+  state: GameState;
+  actor: { role: "gm" } | { role: "team"; teamId: TeamId };
+  busy: boolean;
+  act: ActionFn;
+}) {
+  const [draft, setDraft] = useState("");
+  const streamRef = useRef<HTMLDivElement>(null);
+  const messages = state.chatMessages ?? [];
+  const latestMessageId = messages[messages.length - 1]?.id ?? "";
+  const draftLength = Array.from(draft).length;
+
+  useEffect(() => {
+    const stream = streamRef.current;
+    if (stream) stream.scrollTop = stream.scrollHeight;
+  }, [latestMessageId]);
+
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || busy) return;
+    const ok = await act("sendChatMessage", { text });
+    if (ok) setDraft("");
+  };
+
+  return <div className="content-stack chat-view">
+    <PageTitle eyebrow="PUBLIC CHANNEL" title="全場聊天室" text="紅、藍、金三隊同 GM 共用；所有登入參加者都會見到訊息。" action={<div className="live-pill"><span /> 全場同步</div>} />
+    <section className="chat-panel">
+      <header className="chat-channel-header"><div><b># 全部組＆GM</b><small>公開頻道・最多保留最近 200 則訊息</small></div><span>{messages.length} 則</span></header>
+      <div className="chat-stream" ref={streamRef} role="log" aria-live="polite" aria-label="全場聊天訊息">
+        {messages.length === 0 && <div className="chat-empty"><span>✉</span><b>未有訊息</b><small>可以先向全部隊伍同 GM 打個招呼。</small></div>}
+        {messages.map((message) => {
+          const senderTeamId = message.senderTeamId;
+          const senderName = message.senderRole === "gm"
+            ? "GM"
+            : senderTeamId
+              ? displayTeamName(state, senderTeamId)
+              : "隊伍";
+          const senderColor = message.senderRole === "gm"
+            ? "var(--cyan)"
+            : senderTeamId
+              ? TEAMS[senderTeamId].color
+              : "var(--muted)";
+          const own = message.senderRole === actor.role &&
+            (actor.role === "gm" || message.senderTeamId === actor.teamId);
+          return <article className={`chat-message ${own ? "own" : ""} ${message.senderRole}`} style={{ "--chat-color": senderColor } as React.CSSProperties} key={message.id}>
+            <div className="chat-message-meta"><b>{message.senderRole === "gm" ? "◆" : "⚑"} {senderName}</b><time dateTime={message.createdAt}>{formatTime(message.createdAt)}</time></div>
+            <p>{message.text}</p>
+          </article>;
+        })}
+      </div>
+      <form className="chat-compose" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+        <label>
+          <span className="sr-only">輸入公開訊息</span>
+          <textarea rows={2} value={draft} onChange={(event) => setDraft(Array.from(event.target.value).slice(0, 280).join(""))} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} placeholder="輸入訊息俾全部組同 GM…（Enter 發送）" />
+        </label>
+        <div><small>{draftLength}/280</small><button type="submit" disabled={busy || !draft.trim()}>{busy ? "發送中…" : "發送"}</button></div>
+      </form>
     </section>
   </div>;
 }
@@ -764,7 +842,7 @@ function ProjectsView({ state, teamId, busy, act }: { state: GameState; teamId: 
           </article>;
         })}
       </div>
-      <section className="settlement-rule"><div><span>01</span><b>先完成四項</b><p>15:00 前完成全部才取得出航資格。</p></div><div><span>02</span><b>資產自動清算</b><p>剩餘資源按官方賣價、業權每個 $4 計算。</p></div><div><span>03</span><b>最高現金勝出</b><p>合資格隊伍以清算後現金決勝。</p></div></section>
+      <section className="settlement-rule"><div><span>01</span><b>先完成四項</b><p>15:00 前完成全部才取得出航資格。</p></div><div><span>02</span><b>資產自動清算</b><p>剩餘資源按官方賣價、C5 已交資源每份 $4、業權每個 $4 計算。</p></div><div><span>03</span><b>最高現金勝出</b><p>合資格隊伍以清算後現金決勝。</p></div></section>
       {state.settled && <section className="leaderboard"><div className="section-heading"><div><span>FINAL RESULT</span><h2>出航排名</h2></div></div>{state.finalScores.map((score) => <div key={score.teamId} className={score.teamId === teamId ? "mine" : ""}><b>#{score.rank}</b><span style={{ color: TEAMS[score.teamId].color }}>⚑ {displayTeamName(state, score.teamId)}</span><small>{score.qualified ? "四項認證完成" : `${score.projects}/4 認證`}</small><strong>${score.cash}</strong></div>)}</section>}
     </div>
   );
@@ -853,16 +931,30 @@ const GM_NAV = [
   { id: "approvals", label: "審批", icon: "☑" },
   { id: "assets", label: "資產", icon: "▣" },
   { id: "log", label: "紀錄", icon: "≡" },
+  { id: "chat", label: "聊天室", icon: "✉" },
 ] as const;
 
 function GMDashboard({ state, busy, act, gmPin, onLogout }: { state: GameState; busy: boolean; act: ActionFn; gmPin: string; onLogout: () => void }) {
   const [view, setView] = useState<(typeof GM_NAV)[number]["id"]>("control");
   const pendingCount = state.challenges.filter((item) => item.status === "pending").length + (state.publicTaskClaims ?? []).filter((item) => item.status === "pending").length + (state.lunchContractClaims ?? []).filter((item) => item.status === "submitted").length + state.taskRuns.filter((item) => item.status === "submitted").length;
+  const chatMessages = state.chatMessages ?? [];
+  const latestChatId = chatMessages[chatMessages.length - 1]?.id ?? "";
+  const [lastReadChatId, setLastReadChatId] = useState(latestChatId);
+  const lastReadChatIndex = chatMessages.findIndex((message) => message.id === lastReadChatId);
+  const unreadChatCount = view === "chat" ? 0 : chatMessages
+    .slice(lastReadChatIndex >= 0 ? lastReadChatIndex + 1 : 0)
+    .filter((message) => message.senderRole === "team")
+    .length;
+  const selectView = (nextView: (typeof GM_NAV)[number]["id"]) => {
+    if (view === "chat" || nextView === "chat") setLastReadChatId(latestChatId);
+    setView(nextView);
+  };
+
   return (
     <main className="app-shell gm-shell">
       <aside className="sidebar">
         <div className="side-brand"><span className="train-mark">➤</span><b>棋航者</b><small>最後登船令・GM</small></div>
-        <nav>{GM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><span>{item.icon}</span>{item.label}{item.id === "approvals" && pendingCount > 0 && <i>{pendingCount}</i>}</button>)}</nav>
+        <nav>{GM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><span>{item.icon}</span>{item.label}{item.id === "approvals" && pendingCount > 0 && <i>{pendingCount}</i>}{item.id === "chat" && unreadChatCount > 0 && <i>{Math.min(unreadChatCount, 99)}</i>}</button>)}</nav>
         <div className="one-way-note"><b>GM 權限</b><span>所有操作即時同步三隊</span></div><button className="logout-link" onClick={onLogout}>退出 GM</button>
       </aside>
       <header className="topbar"><div className="room-chip"><span>♟</span> 房間 <b>{state.roomCode}</b></div><div className="live-pill compact"><span /> GM LIVE</div><div className="top-team">當前：{phaseName(state.phase)}</div><div className="cash-chip">⌁ <b>{pendingCount}</b> 待處理</div></header>
@@ -871,8 +963,9 @@ function GMDashboard({ state, busy, act, gmPin, onLogout }: { state: GameState; 
         {view === "approvals" && <GMApprovals state={state} busy={busy} act={act} />}
         {view === "assets" && <GMAssets state={state} busy={busy} act={act} />}
         {view === "log" && <GMLog state={state} busy={busy} act={act} />}
+        {view === "chat" && <ChatRoom state={state} actor={{ role: "gm" }} busy={busy} act={act} />}
       </section>
-      <nav className="mobile-nav gm">{GM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><span>{item.icon}</span>{item.label}{item.id === "approvals" && pendingCount > 0 && <i>{pendingCount}</i>}</button>)}</nav>
+      <nav className="mobile-nav gm">{GM_NAV.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => selectView(item.id)}><span>{item.icon}</span>{item.label}{item.id === "approvals" && pendingCount > 0 && <i>{pendingCount}</i>}{item.id === "chat" && unreadChatCount > 0 && <i>{Math.min(unreadChatCount, 99)}</i>}</button>)}</nav>
     </main>
   );
 }
@@ -887,7 +980,7 @@ function GMControl({ state, busy, act, gmPin }: { state: GameState; busy: boolea
       <article className="gm-action-card production"><span className="gm-card-icon">⚙</span><div><small>PRODUCTION TICK</small><h2>第 {state.productionTick + 1} 次生產</h2><p>自動為所有有效業權生產 1 份指定資源；停產標記會同時清除。</p></div><button disabled={busy} onClick={() => void act("runProduction")}>結算生產</button></article>
       <article className={`gm-action-card cutoff ${challengesOpen ? "" : "closed"}`}><span className="gm-card-icon">◷</span><div><small>13:00 START・14:45 CUTOFF</small><h2>{!routeActive ? "下午任務尚未開始" : challengesOpen ? "任務仍然開放" : "所有任務已截止"}</h2><p>{!routeActive ? "切換至「航線開拓」後，系統先會開放到站及 A、B、C 任務。" : "14:45 關閉後，未提交的進行中任務亦會停止。"}</p></div><button disabled={busy || !routeActive} onClick={() => void act("setTasksOpen", { open: !state.tasksOpen })}>{!routeActive ? "等待航線開拓" : challengesOpen ? "停止全部任務" : "重新開放任務"}</button></article>
       <article className={`gm-action-card gps ${state.gpsStrict ? "active" : ""}`}><span className="gm-card-icon">⌖</span><div><small>LOCATION MODE</small><h2>{state.gpsStrict ? "GPS 實地驗證" : "示範到站模式"}</h2><p>實地模式會核對玩家與所選車站距離；測試時可先關閉。</p></div><button disabled={busy} onClick={() => void act("setGpsStrict", { strict: !state.gpsStrict })}>{state.gpsStrict ? "改用示範模式" : "啟用 GPS"}</button></article>
-      <article className={`gm-action-card settlement ${state.settled ? "closed" : ""}`}><span className="gm-card-icon">🏁</span><div><small>15:00 SETTLEMENT</small><h2>{state.settled ? "最終排名已鎖定" : "出航資格與資產清算"}</h2><p>先判斷四項認證，再將資源按賣價、業權每個 $4 轉成現金排名。</p></div><button disabled={busy || state.settled} onClick={() => { if (window.confirm("確定進行 15:00 最終結算？結算後資源會轉成現金。")) void act("settleGame"); }}>{state.settled ? "結算完成" : "進行最終結算"}</button></article>
+      <article className={`gm-action-card settlement ${state.settled ? "closed" : ""}`}><span className="gm-card-icon">🏁</span><div><small>15:00 SETTLEMENT</small><h2>{state.settled ? "最終排名已鎖定" : "出航資格與資產清算"}</h2><p>先判斷四項認證，再將剩餘資源按賣價、C5 已交資源每份 $4、業權每個 $4 轉成現金排名。</p></div><button disabled={busy || state.settled} onClick={() => { if (window.confirm("確定進行 15:00 最終結算？剩餘資源及 C5 合約價值會轉成現金。")) void act("settleGame"); }}>{state.settled ? "結算完成" : "進行最終結算"}</button></article>
     </div>
     <TeamPinManager state={state} gmPin={gmPin} />
     <section><div className="section-heading"><div><span>TEAM PULSE</span><h2>三隊即時狀態</h2></div><small>站點、現金及四項認證</small></div><div className="gm-team-grid">{(Object.keys(TEAMS) as TeamId[]).map((id) => <GMTeamSummary key={id} state={state} teamId={id} />)}</div></section>
@@ -968,7 +1061,7 @@ function GMApprovals({ state, busy, act }: { state: GameState; busy: boolean; ac
     <section><div className="section-heading"><div><span>PUBLIC TASKS</span><h2>公共任務審批</h2></div><small>每組每項最多完成一次</small></div><div className="approval-list">{publicClaims.length === 0 && <div className="empty-state">未有公共任務等待裁決。</div>}{publicClaims.map((claim) => { const task = PUBLIC_TASKS.find((item) => item.id === claim.taskId); const prompt = task ? task.prompts[claim.promptIndex ?? publicPromptIndex(claim.id, task.prompts.length)] : null; return <article className="approval-card" key={claim.id}><div className="approval-code">{claim.taskId}</div><div><small>{formatTime(claim.createdAt)}・各隊獨立完成</small><h3>{displayTeamName(state, claim.teamId)}：{task?.title}</h3><p>本隊題目：<b>{prompt?.title ?? "—"}</b><br />通過後一次性生產 <b style={{ color: task ? RESOURCES[task.reward].color : undefined }}>{task ? `${RESOURCES[task.reward].name} ×1` : "資源"}</b></p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolvePublicTask", { claimId: claim.id, approved: false })}>未完成・可重做</button><button className="approve" disabled={busy} onClick={() => void act("resolvePublicTask", { claimId: claim.id, approved: true })}>通過＋生產</button></div></article>; })}</div></section>
     <section><div className="section-heading"><div><span>LUNCH DELIVERIES</span><h2>午餐合約收貨</h2></div><small>確認時先扣資源及付款</small></div><div className="approval-list">{lunchSubmissions.length === 0 && <div className="empty-state">未有午餐合約等待收貨。</div>}{lunchSubmissions.map((claim) => { const contract = LUNCH_CONTRACTS.find((item) => item.id === claim.contractId); return <article className="approval-card" key={claim.id}><div className="approval-code">{claim.contractId}</div><div><small>{claim.submittedAt ? formatTime(claim.submittedAt) : ""}・先到先得合約</small><h3>{displayTeamName(state, claim.teamId)}：{contract?.title}</h3><p>交貨 <b>{describeResources(claim.resources)}</b>・應付 <b className="money">${contract?.cash ?? 0}</b></p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveLunchContract", { claimId: claim.id, approved: false })}>退回補貨</button><button className="approve" disabled={busy} onClick={() => void act("resolveLunchContract", { claimId: claim.id, approved: true })}>確認收貨＋付款</button></div></article>; })}</div></section>
     <section><div className="section-heading"><div><span>SEALED AUCTION</span><h2>C2 泊位密封競投</h2></div><button className="small-action" disabled={busy || auctionSubmissions.length === 0} onClick={() => { if (window.confirm(`確定揭開 ${auctionSubmissions.length} 份出價並立即結算？`)) void act("resolveAuction"); }}>揭標結算</button></div><div className="approval-list">{auctionSubmissions.length === 0 && <div className="empty-state">未有密封出價。</div>}{auctionSubmissions.map((run) => <article className="approval-card" key={run.id}><div className="approval-code">C2</div><div><small>{run.submittedAt ? formatTime(run.submittedAt) : ""}・密封至GM揭標</small><h3>{displayTeamName(state, run.teamId)} 出價 <span className="money">${run.bid ?? 0}</span></h3><p>勝出預選：{run.auctionReward ? describeResources(run.auctionReward) : "—"}</p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveTask", { runId: run.id, approved: false })}>退回改價</button></div></article>)}</div></section>
-    <section><div className="section-heading"><div><span>JOINT CONTRACT</span><h2>C5 三隊拼船單</h2></div><button className="small-action" disabled={busy || jointSubmissions.length < 3} onClick={() => { if (window.confirm("確定核對三隊合約碼、扣除貢獻並各發 $4？")) void act("resolveJointContract"); }}>三隊一鍵結算</button></div><div className="approval-list">{jointSubmissions.length === 0 && <div className="empty-state">等待三隊使用同一合約碼提交；合計須涵蓋最少3種資源。</div>}{jointSubmissions.map((run) => <article className="approval-card" key={run.id}><div className="approval-code">C5</div><div><small>{run.submittedAt ? formatTime(run.submittedAt) : ""}・合約碼 {run.contractCode ?? "—"}</small><h3>{displayTeamName(state, run.teamId)} 貢獻</h3><p>{run.contribution ? describeResources(run.contribution) : "—"}・成立後本隊收 $4</p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveTask", { runId: run.id, approved: false })}>退回更正</button></div></article>)}</div></section>
+    <section><div className="section-heading"><div><span>JOINT CONTRACT</span><h2>C5 三隊拼船單</h2></div><button className="small-action" disabled={busy || jointSubmissions.length < 3} onClick={() => { if (window.confirm("確定核對三隊合約碼並扣除貢獻？每份資源會於遊戲結束時按 $4 結算。")) void act("resolveJointContract"); }}>確認三隊交貨</button></div><div className="approval-list">{jointSubmissions.length === 0 && <div className="empty-state">等待三隊使用同一合約碼提交；合計須涵蓋最少3種資源。</div>}{jointSubmissions.map((run) => { const units = run.contribution ? RESOURCE_KEYS.reduce((sum, key) => sum + run.contribution![key], 0) : 0; return <article className="approval-card" key={run.id}><div className="approval-code">C5</div><div><small>{run.submittedAt ? formatTime(run.submittedAt) : ""}・合約碼 {run.contractCode ?? "—"}</small><h3>{displayTeamName(state, run.teamId)} 貢獻</h3><p>{run.contribution ? describeResources(run.contribution) : "—"}・終局結算值 <b className="money">${units * 4}</b></p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveTask", { runId: run.id, approved: false })}>退回更正</button></div></article>; })}</div></section>
     <section><div className="section-heading"><div><span>MISSION SUBMISSIONS</span><h2>下午任務提交</h2></div></div><div className="approval-list">{submissions.length === 0 && <div className="empty-state">未有等待確認的任務。</div>}{submissions.map((run) => { const task = AFTERNOON_TASKS.find((item) => item.id === run.taskId); return <article className="approval-card" key={run.id}><div className="approval-code">{run.taskId}</div><div><small>{run.submittedAt ? formatTime(run.submittedAt) : ""}・{task ? STATIONS[task.station].name : ""}</small><h3>{displayTeamName(state, run.teamId)}：{task?.title}</h3><p>{run.note || "玩家沒有附加備註。"}{run.stakeReward ? `・補貨 ${describeResources(run.stakeReward)}` : run.rewardResource ? `・自選 ${RESOURCES[run.rewardResource].name}` : ""}</p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveTask", { runId: run.id, approved: false })}>退回重做</button>{state.teams[run.teamId].retries > 0 && <button disabled={busy} onClick={() => void act("resolveTask", { runId: run.id, approved: false, useRetry: true })}>用重試</button>}<button className="approve" disabled={busy} onClick={() => void act("resolveTask", { runId: run.id, approved: true })}>通過＋發獎</button></div></article>; })}</div></section>
   </div>;
 }

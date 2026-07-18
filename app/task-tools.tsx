@@ -468,24 +468,24 @@ function UniqueClueTool({ questionSet, onComplete }: { questionSet: number; onCo
 
 function JointContractTool({ state, teamId, onComplete }: { state: GameState; teamId: TeamId; onComplete: CompleteFn }) {
   const team = state.teams[teamId];
-  const submittedRuns = state.taskRuns.filter((run) => run.taskId === "C5" && ["submitted", "completed"].includes(run.status));
-  const existingCode = submittedRuns.find((run) => run.contractCode)?.contractCode ?? "";
-  const [code, setCode] = useState(existingCode);
-  const effectiveCode = code || existingCode;
+  const contractRuns = state.taskRuns.filter((run) => run.taskId === "C5" && ["started", "submitted", "completed"].includes(run.status));
+  const submittedRuns = contractRuns.filter((run) => ["submitted", "completed"].includes(run.status));
+  const currentRun = [...contractRuns].reverse().find((run) => run.teamId === teamId);
+  const legacyRoomCode = `C5${state.roomCode.replace(/[^A-Z0-9]/gi, "").slice(-4).padStart(4, "0")}`.toUpperCase();
+  const sharedCode = currentRun?.contractCode ?? contractRuns.find((run) => run.contractCode)?.contractCode ?? legacyRoomCode;
   const [basket, setBasket] = useState<Resources>(emptyResources);
   const total = RESOURCE_KEYS.reduce((sum, key) => sum + basket[key], 0);
   const coverage = new Set<ResourceKey>();
   for (const run of submittedRuns) for (const key of RESOURCE_KEYS) if ((run.contribution?.[key] ?? 0) > 0) coverage.add(key);
   for (const key of RESOURCE_KEYS) if (basket[key] > 0) coverage.add(key);
   const change = (key: ResourceKey, delta: number) => setBasket((current) => ({ ...current, [key]: Math.max(0, Math.min(team.resources[key], current[key] + delta)) }));
-  return <ToolFrame eyebrow="三隊一張單・GM 最後一次結算" title="三隊拼船單">
-    <ol className="contract-steps"><li><b>1</b><span>第一隊開合約碼；之後兩隊按下使用現有碼。</span></li><li><b>2</b><span>每隊揀最少1份資源，三隊合計要涵蓋3種。</span></li><li><b>3</b><span>三隊提交後等 GM 一鍵扣貨；每隊各得 $4。</span></li></ol>
+  return <ToolFrame eyebrow="三隊一張單・每份資源終局值 $4" title="三隊拼船單">
+    <ol className="contract-steps"><li><b>1</b><span>系統建立共用合約碼；三隊到達 C5 後自動加入。</span></li><li><b>2</b><span>每隊揀最少1份資源，三隊合計要涵蓋3種。</span></li><li><b>3</b><span>GM 確認後即時扣貨；每份資源於遊戲結束時按 $4 結算。</span></li></ol>
     <div className="joint-status">{(Object.keys(state.teams) as TeamId[]).map((id) => { const run = [...submittedRuns].reverse().find((item) => item.teamId === id); return <div className={run ? "ready" : ""} key={id}><b>{state.teams[id].name}</b><span>{run ? `已提交 ${run.contractCode}・${run.contribution ? RESOURCE_KEYS.filter((key) => run.contribution?.[key]).map((key) => RESOURCES[key].name).join("＋") : "—"}` : id === teamId ? "你隊正在填寫" : "未提交"}</span></div>; })}</div>
-    <label className="tool-input">共同合約碼<input value={effectiveCode} maxLength={8} onChange={(event) => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="例如 PIER25" /></label>
-    {existingCode && effectiveCode !== existingCode && <button className="ghost tool-wide" onClick={() => setCode(existingCode)}>使用現有合約碼：{existingCode}</button>}
-    <p className="tool-hint">目前連同你隊選擇共涵蓋 <b>{coverage.size}/3</b> 種資源。你隊提交後仍要等其他隊及 GM。</p>
+    <div className="hidden-code">⌁ 共用合約碼：{sharedCode}</div>
+    <p className="tool-hint">目前連同你隊選擇共涵蓋 <b>{coverage.size}/3</b> 種資源；你隊已選 <b>{total}</b> 份，成功成單後終局結算值為 <b>${total * 4}</b>。</p>
     <div className="mini-builder">{RESOURCE_KEYS.map((key) => <div key={key}><span style={{ color: RESOURCES[key].color }}>{RESOURCES[key].icon} {RESOURCES[key].name}<small>有{team.resources[key]}</small></span><button onClick={() => change(key, -1)}>−</button><b>{basket[key]}</b><button disabled={basket[key] >= team.resources[key]} onClick={() => change(key, 1)}>＋</button></div>)}</div>
-    <button className="tool-wide" disabled={effectiveCode.length < 3 || total < 1 || Boolean(existingCode && effectiveCode !== existingCode)} onClick={() => onComplete(`三隊拼船單 ${effectiveCode}；貢獻 ${RESOURCE_KEYS.filter((key) => basket[key]).map((key) => `${RESOURCES[key].name}×${basket[key]}`).join("、")}`, { contractCode: effectiveCode, contribution: basket })}>{existingCode && effectiveCode !== existingCode ? "合約碼必須跟現有碼一致" : "鎖定本隊貢獻・提交等GM"}</button>
+    <button className="tool-wide" disabled={sharedCode.length < 3 || total < 1} onClick={() => onComplete(`三隊拼船單 ${sharedCode}；貢獻 ${RESOURCE_KEYS.filter((key) => basket[key]).map((key) => `${RESOURCES[key].name}×${basket[key]}`).join("、")}`, { contractCode: sharedCode, contribution: basket })}>鎖定本隊貢獻・提交等GM</button>
   </ToolFrame>;
 }
 

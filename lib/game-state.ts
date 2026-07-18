@@ -67,6 +67,8 @@ export type TaskRun = {
   auctionReward?: Resources;
   contractCode?: string;
   contribution?: Resources;
+  /** Deferred C5 payout recorded by the new per-resource settlement rule. */
+  jointSettlementValue?: number;
   stakeType?: "cash" | "property";
   stakePropertyId?: string;
   stakeReward?: Resources;
@@ -118,6 +120,14 @@ export type LogEntry = {
   tone: "info" | "good" | "warn";
 };
 
+export type ChatMessage = {
+  id: string;
+  senderRole: "gm" | "team";
+  senderTeamId?: TeamId;
+  text: string;
+  createdAt: string;
+};
+
 export type FinalScore = {
   teamId: TeamId;
   qualified: boolean;
@@ -143,6 +153,8 @@ export type GameState = {
   lunchContractClaims: LunchContractClaim[];
   taskRuns: TaskRun[];
   trades: Trade[];
+  /** Optional so rooms created before the chat upgrade remain readable. */
+  chatMessages?: ChatMessage[];
   log: LogEntry[];
   settled: boolean;
   finalScores: FinalScore[];
@@ -206,6 +218,7 @@ export function makeInitialState(mode: "demo" | "live" = "demo"): GameState {
     lunchContractClaims: [],
     taskRuns: [],
     trades: [],
+    chatMessages: [],
     settled: false,
     finalScores: [],
     log: [
@@ -241,6 +254,13 @@ function log(state: GameState, text: string, tone: LogEntry["tone"] = "info") {
 
 function teamName(state: GameState, id: TeamId) {
   return state.teams[id]?.name ?? TEAMS[id].name;
+}
+
+function c5ContractCode(state: GameState) {
+  const existing = [...state.taskRuns].reverse().find((run) =>
+    run.taskId === "C5" && run.status !== "completed" && Boolean(run.contractCode)
+  )?.contractCode;
+  return existing ?? `C5${crypto.randomUUID().replace(/-/g, "").slice(0, 4).toUpperCase()}`;
 }
 
 function ownedProperties(state: GameState, teamId: TeamId) {
@@ -350,6 +370,41 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
 export function mutateGame(state: GameState, action: string, payload: Record<string, unknown>) {
   if (action === "reset") {
     return makeInitialState(payload.mode === "live" ? "live" : "demo");
+  }
+
+  if (action === "sendChatMessage") {
+    const senderRole: ChatMessage["senderRole"] = payload.senderRole === "gm" ? "gm" : "team";
+    const senderTeamId = senderRole === "team" && isTeamId(payload.senderTeamId)
+      ? payload.senderTeamId
+      : undefined;
+    if (senderRole === "team" && !senderTeamId) throw new Error("未能確認發言隊伍。");
+
+    const text = String(payload.text ?? "")
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) throw new Error("訊息不可留空。");
+    if (Array.from(text).length > 280) throw new Error("訊息最多 280 個字。");
+
+    const messages = state.chatMessages ?? [];
+    const lastFromSender = [...messages].reverse().find((message) =>
+      message.senderRole === senderRole &&
+      (senderRole === "gm" || message.senderTeamId === senderTeamId)
+    );
+    if (lastFromSender && Date.now() - new Date(lastFromSender.createdAt).getTime() < 700) {
+      throw new Error("發送得太快，請稍等再試。");
+    }
+
+    const createdAt = new Date().toISOString();
+    state.chatMessages = [...messages, {
+      id: crypto.randomUUID(),
+      senderRole,
+      ...(senderTeamId ? { senderTeamId } : {}),
+      text,
+      createdAt,
+    }].slice(-200);
+    state.updatedAt = createdAt;
+    return state;
   }
 
   // Older rooms could retain an accidentally opened route flag after returning
@@ -793,15 +848,17 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
     if (task.capacity && needsNewSlot && occupiedTaskSlots(state, task.id) >= task.capacity) {
       throw new Error(`限量任務 ${task.id} 的 ${task.capacity} 個名額已被搶完。`);
     }
+    const sharedContractCode = task.id === "C5" ? c5ContractCode(state) : undefined;
     if (existing?.status === "rejected") {
       existing.status = "started";
       existing.startedAt = new Date().toISOString();
       existing.submittedAt = undefined;
       existing.failedAt = undefined;
       existing.questionSet = nextQuestionSet(state, task.id);
+      if (sharedContractCode) existing.contractCode = sharedContractCode;
       log(state, `${teamName(state, teamId)}重新搶得 ${task.id}「${task.title}」${task.capacity ? `限量名額（${occupiedTaskSlots(state, task.id)}/${task.capacity}）` : ""}。`, task.capacity ? "warn" : "info");
     } else if (!existing) {
-      state.taskRuns.push({ id: crypto.randomUUID(), taskId: task.id, teamId, status: "started", startedAt: new Date().toISOString(), questionSet: nextQuestionSet(state, task.id) });
+      state.taskRuns.push({ id: crypto.randomUUID(), taskId: task.id, teamId, status: "started", startedAt: new Date().toISOString(), questionSet: nextQuestionSet(state, task.id), contractCode: sharedContractCode });
       log(state, `${teamName(state, teamId)}開始挑戰 ${task.id}「${task.title}」${task.capacity ? `，並搶得限量名額（${occupiedTaskSlots(state, task.id)}/${task.capacity}）` : ""}。`, task.capacity ? "warn" : "info");
     }
     return state;
@@ -850,8 +907,10 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
       const contribution = parseSide({ resources: payload.contribution }).resources;
       if (RESOURCE_KEYS.reduce((sum, key) => sum + contribution[key], 0) < 1) throw new Error("每隊最少貢獻1份資源。");
       if (!hasResources(state.teams[teamId], contribution)) throw new Error("現有資源不足以作出這份貢獻。");
-      const contractCode = String(payload.contractCode ?? "").trim().toUpperCase().slice(0, 8);
+      const contractCode = String(run.contractCode ?? payload.contractCode ?? "").trim().toUpperCase().slice(0, 8);
       if (!/^[A-Z0-9]{3,8}$/.test(contractCode)) throw new Error("請輸入三隊共同使用的3–8位英數合約碼。");
+      const activeCode = [...state.taskRuns].reverse().find((item) => item.taskId === "C5" && item.id !== run.id && item.status !== "completed" && item.contractCode)?.contractCode;
+      if (activeCode && contractCode !== activeCode) throw new Error("共用合約碼已更新，請重新載入 C5 再提交。");
       run.contribution = contribution;
       run.contractCode = contractCode;
     }
@@ -908,10 +967,14 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
     if (coverage.size < 3) throw new Error("三隊總貢獻必須涵蓋最少3種資源。");
     for (const run of confirmed) {
       subtractResources(state.teams[run.teamId], run.contribution ?? {});
-      state.teams[run.teamId].cash += 4;
+      run.jointSettlementValue = RESOURCE_KEYS.reduce(
+        (sum, key) => sum + (run.contribution?.[key] ?? 0) * 4,
+        0
+      );
       run.status = "completed";
     }
-    log(state, `三隊拼船單 ${confirmed[0].contractCode} 成立：三隊完成扣貨並各得 $4。`, "good");
+    const contractValue = confirmed.reduce((sum, run) => sum + (run.jointSettlementValue ?? 0), 0);
+    log(state, `三隊拼船單 ${confirmed[0].contractCode} 成立：三隊完成扣貨，合共 $${contractValue} 將於遊戲結束時結算。`, "good");
     return state;
   }
 
@@ -978,7 +1041,10 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
         0
       );
       const propertyValue = ownedProperties(state, teamId).length * 4;
-      target.cash += resourceValue + propertyValue;
+      const jointContractValue = state.taskRuns
+        .filter((run) => run.teamId === teamId && run.taskId === "C5" && run.status === "completed")
+        .reduce((sum, run) => sum + (run.jointSettlementValue ?? 0), 0);
+      target.cash += resourceValue + propertyValue + jointContractValue;
       target.resources = emptyResources();
       return {
         teamId,
@@ -1026,6 +1092,10 @@ export function verifyCredential(action: string, payload: Record<string, unknown
   ]);
   if (action === "auth") {
     if (payload.role === "gm") return pin === gmPin;
+    return isTeamId(payload.teamId) && pin === teamPins[payload.teamId];
+  }
+  if (action === "sendChatMessage") {
+    if (pin === gmPin) return true;
     return isTeamId(payload.teamId) && pin === teamPins[payload.teamId];
   }
   if (gmActions.has(action)) return pin === gmPin;
