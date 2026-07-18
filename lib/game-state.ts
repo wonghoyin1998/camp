@@ -1,5 +1,6 @@
 import {
   AFTERNOON_TASKS,
+  C5_SETTLEMENT_PER_RESOURCE,
   LUNCH_CONTRACTS,
   PUBLIC_TASKS,
   PROJECTS,
@@ -67,7 +68,7 @@ export type TaskRun = {
   auctionReward?: Resources;
   contractCode?: string;
   contribution?: Resources;
-  /** Deferred C5 payout recorded by the new per-resource settlement rule. */
+  /** Deferred C5 payout recorded after GM confirms the three-team contract. */
   jointSettlementValue?: number;
   stakeType?: "cash" | "property";
   stakePropertyId?: string;
@@ -913,6 +914,7 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
       if (activeCode && contractCode !== activeCode) throw new Error("共用合約碼已更新，請重新載入 C5 再提交。");
       run.contribution = contribution;
       run.contractCode = contractCode;
+      subtractResources(state.teams[teamId], contribution);
     }
     if (run.taskId === "C6") {
       if (payload.stakeType !== "cash" && payload.stakeType !== "property") throw new Error("請選擇支付現金或抵押業權。");
@@ -932,7 +934,9 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
       }
       run.stakeReward = reward;
     }
-    log(state, `${teamName(state, teamId)}提交 ${run.taskId}，等待 GM 確認。`, "warn");
+    log(state, run.taskId === "C5"
+      ? `${teamName(state, teamId)}提交 C5；貢獻資源已即時扣起，等待 GM 確認。`
+      : `${teamName(state, teamId)}提交 ${run.taskId}，等待 GM 確認。`, "warn");
     return state;
   }
 
@@ -961,20 +965,19 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
     if (codes.size !== 1) throw new Error("三隊合約碼不一致，請退回更正。");
     const coverage = new Set<ResourceKey>();
     for (const run of confirmed) {
-      if (!run.contribution || !hasResources(state.teams[run.teamId], run.contribution)) throw new Error(`${teamName(state, run.teamId)}資源不足以履行貢獻。`);
+      if (!run.contribution) throw new Error(`${teamName(state, run.teamId)}的扣起資源紀錄不完整，請退回重新提交。`);
       for (const key of RESOURCE_KEYS) if (run.contribution[key] > 0) coverage.add(key);
     }
     if (coverage.size < 3) throw new Error("三隊總貢獻必須涵蓋最少3種資源。");
     for (const run of confirmed) {
-      subtractResources(state.teams[run.teamId], run.contribution ?? {});
       run.jointSettlementValue = RESOURCE_KEYS.reduce(
-        (sum, key) => sum + (run.contribution?.[key] ?? 0) * 4,
+        (sum, key) => sum + (run.contribution?.[key] ?? 0) * C5_SETTLEMENT_PER_RESOURCE,
         0
       );
       run.status = "completed";
     }
     const contractValue = confirmed.reduce((sum, run) => sum + (run.jointSettlementValue ?? 0), 0);
-    log(state, `三隊拼船單 ${confirmed[0].contractCode} 成立：三隊完成扣貨，合共 $${contractValue} 將於遊戲結束時結算。`, "good");
+    log(state, `三隊拼船單 ${confirmed[0].contractCode} 成立：早前扣起的資源已確認，合共 $${contractValue} 將於遊戲結束時結算。`, "good");
     return state;
   }
 
@@ -983,6 +986,11 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
     if (!run) throw new Error("任務提交已處理或不存在。");
     const approved = Boolean(payload.approved);
     if (!approved) {
+      if (run.taskId === "C5" && run.contribution) {
+        addResources(state.teams[run.teamId], run.contribution);
+        run.contribution = undefined;
+        run.jointSettlementValue = undefined;
+      }
       if (state.teams[run.teamId].retries > 0 && Boolean(payload.useRetry)) {
         state.teams[run.teamId].retries -= 1;
         run.status = "started";
@@ -1027,6 +1035,18 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
 
   if (action === "settleGame") {
     if (state.settled) throw new Error("遊戲已完成最終結算。");
+    const unconfirmedC5Runs = state.taskRuns.filter((run) =>
+      run.taskId === "C5" && run.status === "submitted" && Boolean(run.contribution)
+    );
+    for (const run of unconfirmedC5Runs) {
+      addResources(state.teams[run.teamId], run.contribution ?? {});
+      run.contribution = undefined;
+      run.status = "rejected";
+      run.note = "終局前未能完成三隊合約，扣起資源已自動退回";
+    }
+    if (unconfirmedC5Runs.length > 0) {
+      log(state, `終局前有 ${unconfirmedC5Runs.length} 份 C5 提交未獲確認，扣起資源已退回隊伍庫存。`, "warn");
+    }
     const scores = (Object.keys(state.teams) as TeamId[]).map((teamId) => {
       const target = state.teams[teamId];
       const qualified = target.projects.length === PROJECTS.length;

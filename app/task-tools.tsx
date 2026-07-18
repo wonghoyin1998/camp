@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   ACTION_RELAY_DECK,
   BAG_CODE_ACTIONS,
+  C5_SETTLEMENT_PER_RESOURCE,
   CARGO_ORDER_ROUNDS,
   CHARADES_DECK,
   MARKET_SCENARIOS,
@@ -479,13 +480,13 @@ function JointContractTool({ state, teamId, onComplete }: { state: GameState; te
   for (const run of submittedRuns) for (const key of RESOURCE_KEYS) if ((run.contribution?.[key] ?? 0) > 0) coverage.add(key);
   for (const key of RESOURCE_KEYS) if (basket[key] > 0) coverage.add(key);
   const change = (key: ResourceKey, delta: number) => setBasket((current) => ({ ...current, [key]: Math.max(0, Math.min(team.resources[key], current[key] + delta)) }));
-  return <ToolFrame eyebrow="三隊一張單・每份資源終局值 $4" title="三隊拼船單">
-    <ol className="contract-steps"><li><b>1</b><span>系統建立共用合約碼；三隊到達 C5 後自動加入。</span></li><li><b>2</b><span>每隊揀最少1份資源，三隊合計要涵蓋3種。</span></li><li><b>3</b><span>GM 確認後即時扣貨；每份資源於遊戲結束時按 $4 結算。</span></li></ol>
+  return <ToolFrame eyebrow={`三隊一張單・每份資源終局值 $${C5_SETTLEMENT_PER_RESOURCE}`} title="三隊拼船單">
+    <ol className="contract-steps"><li><b>1</b><span>系統建立共用合約碼；三隊到達 C5 後自動加入。</span></li><li><b>2</b><span>每隊揀最少1份資源，三隊合計要涵蓋3種。</span></li><li><b>3</b><span>提交一刻即時扣起資源，不能再用於其他地方；GM 確認三隊合約後，每份於終局按 ${C5_SETTLEMENT_PER_RESOURCE} 結算。</span></li></ol>
     <div className="joint-status">{(Object.keys(state.teams) as TeamId[]).map((id) => { const run = [...submittedRuns].reverse().find((item) => item.teamId === id); return <div className={run ? "ready" : ""} key={id}><b>{state.teams[id].name}</b><span>{run ? `已提交 ${run.contractCode}・${run.contribution ? RESOURCE_KEYS.filter((key) => run.contribution?.[key]).map((key) => RESOURCES[key].name).join("＋") : "—"}` : id === teamId ? "你隊正在填寫" : "未提交"}</span></div>; })}</div>
     <div className="hidden-code">⌁ 共用合約碼：{sharedCode}</div>
-    <p className="tool-hint">目前連同你隊選擇共涵蓋 <b>{coverage.size}/3</b> 種資源；你隊已選 <b>{total}</b> 份，成功成單後終局結算值為 <b>${total * 4}</b>。</p>
+    <p className="tool-hint">目前連同你隊選擇共涵蓋 <b>{coverage.size}/3</b> 種資源；你隊已選 <b>{total}</b> 份，提交後會即時扣起，成功成單後終局結算值為 <b>${total * C5_SETTLEMENT_PER_RESOURCE}</b>。</p>
     <div className="mini-builder">{RESOURCE_KEYS.map((key) => <div key={key}><span style={{ color: RESOURCES[key].color }}>{RESOURCES[key].icon} {RESOURCES[key].name}<small>有{team.resources[key]}</small></span><button onClick={() => change(key, -1)}>−</button><b>{basket[key]}</b><button disabled={basket[key] >= team.resources[key]} onClick={() => change(key, 1)}>＋</button></div>)}</div>
-    <button className="tool-wide" disabled={sharedCode.length < 3 || total < 1} onClick={() => onComplete(`三隊拼船單 ${sharedCode}；貢獻 ${RESOURCE_KEYS.filter((key) => basket[key]).map((key) => `${RESOURCES[key].name}×${basket[key]}`).join("、")}`, { contractCode: sharedCode, contribution: basket })}>鎖定本隊貢獻・提交等GM</button>
+    <button className="tool-wide" disabled={sharedCode.length < 3 || total < 1} onClick={() => onComplete(`三隊拼船單 ${sharedCode}；貢獻 ${RESOURCE_KEYS.filter((key) => basket[key]).map((key) => `${RESOURCES[key].name}×${basket[key]}`).join("、")}`, { contractCode: sharedCode, contribution: basket })}>確認本隊貢獻・下一步提交</button>
   </ToolFrame>;
 }
 

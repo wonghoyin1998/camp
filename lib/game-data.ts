@@ -1,4 +1,5 @@
 export const RESOURCE_KEYS = ["energy", "intel", "gear", "network"] as const;
+export const C5_SETTLEMENT_PER_RESOURCE = 6;
 
 export type ResourceKey = (typeof RESOURCE_KEYS)[number];
 export type TeamId = "red" | "blue" | "gold";
@@ -324,11 +325,12 @@ export const AFTERNOON_TASKS: TaskDefinition[] = [
     rules: [
       "第一隊開始任務時，系統會建立共用合約碼；其餘兩隊到達 C5 後自動加入。",
       "每隊最少提交 1 份自己現有的資源；畫面會即時顯示三隊提交狀態及合計涵蓋種類。",
-      "三隊總貢獻要涵蓋最少 3 種資源；全部提交後由 GM 一次確認及扣貨。",
-      "每份成功提交的資源會於遊戲結束時按 $4 結算，不會即時派發現金。",
+      "按下提交後，所選資源會即時從隊伍庫存扣起，不能再用於交易、項目或其他任務。",
+      "三隊總貢獻要涵蓋最少 3 種資源；全部提交後由 GM 一次確認。",
+      `每份成功提交的資源會於遊戲結束時按 $${C5_SETTLEMENT_PER_RESOURCE} 結算，不會即時派發現金。`,
     ],
     success: "三隊使用同一合約碼提交，且合計涵蓋最少 3 種資源。",
-    reward: { note: "每份成功提交的資源於遊戲結束時按 $4 結算。" },
+    reward: { note: `每份成功提交的資源於遊戲結束時按 $${C5_SETTLEMENT_PER_RESOURCE} 結算。` },
   },
   {
     id: "C6",
