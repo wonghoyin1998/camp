@@ -18,6 +18,7 @@ import {
   type TeamId,
 } from "../lib/game-data";
 import type { GameState, Resources, TradeSide } from "../lib/game-state";
+import { cargoConstraintViolations } from "../lib/cargo-order";
 
 export const TOOL_TASK_IDS = [
   "A5", "A3", "A1", "A6", "A2", "B7", "B2", "B4", "B1",
@@ -286,17 +287,17 @@ function CargoOrderTool({ questionSet, onComplete }: { questionSet: number; onCo
     return next;
   });
   const check = () => {
-    const errors = items.reduce((count, item, index) => count + (item === card.solution[index] ? 0 : 1), 0);
-    if (errors > 0) { setMessage(`仍有 ${errors} 個位置不符合限制；系統唔會直接顯示答案。`); return; }
-    if (round >= 1) { setDone(true); onComplete("六箱排位戰：連續解開2張裝船次序卡"); }
+    const errors = cargoConstraintViolations(items, card);
+    if (errors > 0) { setMessage(`仍有 ${errors} 條限制未符合；系統唔會直接顯示答案。`); return; }
+    if (round >= 2) { setDone(true); onComplete("六箱排位戰：連續解開3張裝船次序卡"); }
     else {
       const nextRound = round + 1;
       setRound(nextRound);
       setItems([...CARGO_ORDER_ROUNDS[(base + nextRound) % CARGO_ORDER_ROUNDS.length].items].reverse());
-      setMessage("第一張完成，第二張已裝載。");
+      setMessage(`第 ${round + 1} 張完成，下一張已裝載。`);
     }
   };
-  return <ToolFrame eyebrow={`裝船卡 ${round + 1}/2・共用手機`} title={done ? "✓ 兩張排位完成" : "按限制重排六個貨箱"}>
+  return <ToolFrame eyebrow={`裝船卡 ${round + 1}/3・共用手機`} title={done ? "✓ 三張排位完成" : "按限制重排六個貨箱"}>
     {!done && <><ol className="constraint-list">{card.constraints.map((rule) => <li key={rule}>{rule}</li>)}</ol><div className="cargo-order">{items.map((item, index) => <div key={item}><b>{index + 1}</b><span>{item}</span><button className="ghost" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button className="ghost" disabled={index === items.length - 1} onClick={() => move(index, 1)}>↓</button></div>)}</div>{message && <p className="tool-hint">{message}</p>}<button className="tool-wide" onClick={check}>鎖定次序・核對限制</button></>}
     {done && <div className="tool-success">全程毋須傳手機，可以提交任務。</div>}
   </ToolFrame>;
