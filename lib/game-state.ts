@@ -44,9 +44,25 @@ export type Challenge = {
   teamId: TeamId;
   propertyId: string;
   resource: ResourceKey;
+  propertyAttemptId?: string;
+  elapsedMs?: number;
+  benchmarkMs?: number;
   abandonPropertyId?: string;
   status: "pending" | "won" | "lost";
   createdAt: string;
+};
+
+export type PropertyAttempt = {
+  id: string;
+  propertyId: string;
+  teamId: TeamId;
+  status: "running" | "completed" | "cancelled";
+  startedAt: string;
+  finishedAt?: string;
+  elapsedMs?: number;
+  benchmarkMs?: number;
+  success?: boolean;
+  claimedAt?: string;
 };
 
 export type TaskRun = {
@@ -150,6 +166,8 @@ export type GameState = {
   teams: Record<TeamId, TeamState>;
   properties: PropertyState[];
   challenges: Challenge[];
+  /** Optional so rooms created before the server timer upgrade remain readable. */
+  propertyAttempts?: PropertyAttempt[];
   publicTaskClaims: PublicTaskClaim[];
   lunchContractClaims: LunchContractClaim[];
   taskRuns: TaskRun[];
@@ -215,6 +233,7 @@ export function makeInitialState(mode: "demo" | "live" = "demo"): GameState {
       skipNext: false,
     })),
     challenges: [],
+    propertyAttempts: [],
     publicTaskClaims: [],
     lunchContractClaims: [],
     taskRuns: [],
@@ -640,6 +659,71 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
     return state;
   }
 
+  if (action === "startPropertyTimer") {
+    const teamId = requireTeam(payload);
+    const propertyId = String(payload.propertyId ?? "");
+    const property = state.properties.find((item) => item.id === propertyId);
+    if (!property) throw new Error("找不到這個生產點。");
+    if (state.phase !== "morning") throw new Error("P1–P6 計時挑戰只在太和佔領戰期間開放。");
+    if (property.owner === teamId) throw new Error("這個生產點已屬於你隊。");
+    if (state.challenges.some((item) => item.teamId === teamId && item.status === "pending")) {
+      throw new Error("你隊已有一個等待裁決的挑戰。");
+    }
+    const attempts = state.propertyAttempts ?? (state.propertyAttempts = []);
+    const now = Date.now();
+    for (const attempt of attempts.filter((item) => item.status === "running")) {
+      if (now - new Date(attempt.startedAt).getTime() >= 30 * 60 * 1000) attempt.status = "cancelled";
+    }
+    const ownRunning = [...attempts].reverse().find((item) => item.teamId === teamId && item.status === "running");
+    if (ownRunning?.propertyId === propertyId) return state;
+    if (ownRunning) throw new Error(`你隊正在進行 ${ownRunning.propertyId} 計時挑戰。`);
+    if (attempts.some((item) => item.propertyId === propertyId && item.status === "running")) {
+      throw new Error("另一隊正在使用這個 checkpoint，請稍後再開始。");
+    }
+    attempts.push({
+      id: crypto.randomUUID(),
+      propertyId,
+      teamId,
+      status: "running",
+      startedAt: new Date(now).toISOString(),
+    });
+    log(state, `${teamName(state, teamId)}開始 ${propertyId} 實體挑戰計時。`, "warn");
+    return state;
+  }
+
+  if (action === "finishPropertyTimer") {
+    const teamId = requireTeam(payload);
+    const propertyId = String(payload.propertyId ?? "");
+    const property = state.properties.find((item) => item.id === propertyId);
+    if (!property) throw new Error("找不到這個生產點。");
+    const attempts = state.propertyAttempts ?? (state.propertyAttempts = []);
+    const attempt = [...attempts].reverse().find((item) =>
+      item.teamId === teamId && item.propertyId === propertyId && item.status === "running"
+    );
+    if (!attempt) throw new Error("找不到進行中的計時挑戰。");
+    const finishedAt = Date.now();
+    const rawElapsed = finishedAt - new Date(attempt.startedAt).getTime();
+    if (!Number.isFinite(rawElapsed) || rawElapsed < 0 || rawElapsed > 30 * 60 * 1000) {
+      attempt.status = "cancelled";
+      throw new Error("計時紀錄無效，請重新開始。");
+    }
+    const elapsedMs = Math.max(100, Math.round(rawElapsed / 100) * 100);
+    const successfulTimes = attempts
+      .filter((item) => item.id !== attempt.id && item.propertyId === propertyId && item.status === "completed" && item.success && item.elapsedMs)
+      .map((item) => item.elapsedMs as number);
+    const benchmarkMs = successfulTimes.length > 0 ? Math.min(...successfulTimes) : undefined;
+    attempt.status = "completed";
+    attempt.finishedAt = new Date(finishedAt).toISOString();
+    attempt.elapsedMs = elapsedMs;
+    attempt.benchmarkMs = benchmarkMs;
+    attempt.success = benchmarkMs === undefined || elapsedMs < benchmarkMs;
+    const resultLabel = attempt.success
+      ? benchmarkMs === undefined ? "建立首個紀錄" : "成功打破紀錄"
+      : benchmarkMs === undefined ? "紀錄無效" : `未快過 ${(benchmarkMs / 1000).toFixed(1)} 秒紀錄`;
+    log(state, `${teamName(state, teamId)}完成 ${propertyId}，時間 ${(elapsedMs / 1000).toFixed(1)} 秒；${resultLabel}。`, attempt.success ? "good" : "warn");
+    return state;
+  }
+
   if (action === "requestChallenge") {
     const teamId = requireTeam(payload);
     const propertyId = String(payload.propertyId ?? "");
@@ -659,8 +743,18 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
       }
     }
     if (property.owner === teamId) throw new Error("這個生產點已屬於你隊。");
+    const attempts = state.propertyAttempts ?? (state.propertyAttempts = []);
+    const propertyAttempt = [...attempts].reverse().find((item) =>
+      item.teamId === teamId && item.propertyId === propertyId && item.status === "completed" && item.success && !item.claimedAt
+    );
+    if (!propertyAttempt) throw new Error("請先完成計時挑戰並快過目前紀錄。");
+    const challengeId = crypto.randomUUID();
+    propertyAttempt.claimedAt = new Date().toISOString();
     state.challenges.push({
-      id: crypto.randomUUID(), teamId, propertyId, resource, abandonPropertyId,
+      id: challengeId, teamId, propertyId, resource, abandonPropertyId,
+      propertyAttemptId: propertyAttempt.id,
+      elapsedMs: propertyAttempt.elapsedMs,
+      benchmarkMs: propertyAttempt.benchmarkMs,
       status: "pending", createdAt: new Date().toISOString(),
     });
     log(state, `${teamName(state, teamId)}挑戰 ${property.id} ${property.title}，等待 GM 裁決。`, "warn");
@@ -688,6 +782,10 @@ export function mutateGame(state: GameState, action: string, payload: Record<str
       state.teams[challenge.teamId].resources[challenge.resource] += 1;
       log(state, `${teamName(state, challenge.teamId)}成功佔領 ${property.id}，即時生產 1 份資源。`, "good");
     } else {
+      if (challenge.propertyAttemptId) {
+        const attempt = (state.propertyAttempts ?? []).find((item) => item.id === challenge.propertyAttemptId);
+        if (attempt) attempt.success = false;
+      }
       log(state, `${teamName(state, challenge.teamId)}挑戰失敗，原有業權不受影響。`, "warn");
     }
     return state;

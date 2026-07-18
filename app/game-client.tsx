@@ -5,7 +5,9 @@ import {
   AFTERNOON_TASKS,
   C5_SETTLEMENT_PER_RESOURCE,
   LUNCH_CONTRACTS,
+  PROPERTY_CHALLENGE_RULE,
   PROJECTS,
+  PROPERTIES,
   PUBLIC_TASKS,
   RESOURCE_KEYS,
   RESOURCES,
@@ -13,6 +15,7 @@ import {
   STATIONS,
   TEAMS,
   WARMUPS,
+  type PropertyDefinition,
   type PublicTaskDefinition,
   type ResourceKey,
   type TeamId,
@@ -45,6 +48,15 @@ function displayTeamName(state: GameState, teamId: TeamId) {
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("zh-HK", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Hong_Kong" }).format(new Date(value));
+}
+
+function formatChallengeTime(milliseconds?: number) {
+  if (milliseconds === undefined) return "—";
+  const totalTenths = Math.max(0, Math.round(milliseconds / 100));
+  const minutes = Math.floor(totalTenths / 600);
+  const seconds = Math.floor((totalTenths % 600) / 10);
+  const tenths = totalTenths % 10;
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${tenths}`;
 }
 
 function taskLocation(stationIndex: number) {
@@ -486,27 +498,36 @@ function PropertyView({ state, teamId, busy, act }: { state: GameState; teamId: 
   const [resourceByProperty, setResourceByProperty] = useState<Record<string, ResourceKey>>({});
   const [abandonByProperty, setAbandonByProperty] = useState<Record<string, string>>({});
   const [selectedPublicTask, setSelectedPublicTask] = useState<PublicTaskDefinition | null>(null);
+  const [selectedProperty, setSelectedProperty] = useState<PropertyDefinition | null>(null);
   const owned = state.properties.filter((item) => item.owner === teamId);
   const pending = state.challenges.find((item) => item.teamId === teamId && item.status === "pending");
   const publicClaims = state.publicTaskClaims ?? [];
+  const propertyAttempts = state.propertyAttempts ?? [];
   const myActivePublic = publicClaims.find((item) => item.teamId === teamId && ["started", "pending"].includes(item.status));
 
   return (
     <div className="content-stack">
-      <PageTitle eyebrow="11:00–12:15・太和" title="生產點佔領戰" text="完成實體 checkpoint，再選擇該點唯一生產的資源。每隊最多持有 2 個業權。" action={<div className="rule-chip">第 {state.productionTick} 輪生產</div>} />
+      <PageTitle eyebrow="11:00–12:15・太和" title="生產點佔領戰" text="先查看 P1–P6 玩法並到現場完成實體挑戰，再選擇該點生產的資源。每隊最多持有 2 個業權。" action={<div className="rule-chip">第 {state.productionTick} 輪生產</div>} />
       <ResourceStrip state={state} teamId={teamId} />
+      <div className="rule-banner record-rule"><b>⏱ 破紀錄先成功</b><span>{PROPERTY_CHALLENGE_RULE} 開始前先向工作員確認現場最快時間。</span></div>
       <div className="rule-banner"><b>持有上限規則</b><span>已有 2 個仍可挑戰；挑戰前指定一個現有業權，只有勝出先放棄。每種資源最多同時 3 個生產點。</span></div>
       {pending && <div className="pending-banner">⌛ 你隊正挑戰 {pending.propertyId}，等待 GM 裁決；期間不可出售預先指定放棄的業權。</div>}
       <div className="property-grid">
         {state.properties.map((property) => {
+          const definition = PROPERTIES.find((item) => item.id === property.id);
           const owner = property.owner ? TEAMS[property.owner] : null;
           const ownerName = property.owner ? displayTeamName(state, property.owner) : null;
           const chosen = resourceByProperty[property.id] ?? property.resource ?? "energy";
-          const canChallenge = property.owner !== teamId && !pending;
+          const successfulTimes = propertyAttempts.filter((attempt) => attempt.propertyId === property.id && attempt.status === "completed" && attempt.success && attempt.elapsedMs).map((attempt) => attempt.elapsedMs as number);
+          const bestTime = successfulTimes.length > 0 ? Math.min(...successfulTimes) : undefined;
+          const readyAttempt = [...propertyAttempts].reverse().find((attempt) => attempt.propertyId === property.id && attempt.teamId === teamId && attempt.status === "completed" && attempt.success && !attempt.claimedAt);
+          const canChallenge = property.owner !== teamId && !pending && Boolean(readyAttempt);
           return (
             <article className={`property-card ${property.owner === teamId ? "mine" : ""}`} key={property.id} style={{ "--owner": owner?.color ?? "#5d7890" } as React.CSSProperties}>
               <div className="property-head"><span className="card-code">{property.id}</span><span className={`owner-badge ${owner ? "owned" : ""}`}>{ownerName ?? "中立"}</span></div>
-              <h3>{property.title}</h3><p>{property.game}</p>
+              <h3>{property.title}</h3><p>{definition?.game ?? property.game}</p>
+              {definition && <button className="property-rules-button" onClick={() => setSelectedProperty(definition)}>查看玩法及物資</button>}
+              <div className="property-time-to-beat"><small>TIME TO BEAT</small><b>{bestTime === undefined ? "首隊完成即可" : formatChallengeTime(bestTime)}</b>{readyAttempt && <span>✓ 你隊已取得挑戰資格</span>}</div>
               <div className="production-status">
                 {property.resource ? <><span style={{ color: RESOURCES[property.resource].color }}>{RESOURCES[property.resource].icon}</span><b>生產 {RESOURCES[property.resource].name}</b>{property.skipNext && <small>下輪停產</small>}</> : <span className="muted">尚未設定生產</span>}
               </div>
@@ -516,7 +537,7 @@ function PropertyView({ state, teamId, busy, act }: { state: GameState; teamId: 
               ) : (
                 <>
                   {owned.length >= 2 && <label className="mini-select danger">勝出後放棄<select value={abandonByProperty[property.id] ?? ""} onChange={(event) => setAbandonByProperty({ ...abandonByProperty, [property.id]: event.target.value })}><option value="">必須預先指定</option>{owned.map((item) => <option key={item.id} value={item.id}>{item.id} {item.title}</option>)}</select></label>}
-                  <button className="primary-button small" disabled={busy || !canChallenge || (owned.length >= 2 && !abandonByProperty[property.id])} onClick={() => void act("requestChallenge", { propertyId: property.id, resource: chosen, abandonPropertyId: abandonByProperty[property.id] })}>挑戰佔領</button>
+                  <button className="primary-button small" disabled={busy || !canChallenge || (owned.length >= 2 && !abandonByProperty[property.id])} onClick={() => void act("requestChallenge", { propertyId: property.id, resource: chosen, abandonPropertyId: abandonByProperty[property.id] })}>{readyAttempt ? "提交佔領申請" : "先完成計時挑戰"}</button>
                 </>
               )}
             </article>
@@ -536,9 +557,68 @@ function PropertyView({ state, teamId, busy, act }: { state: GameState; teamId: 
           </article>;
         })}</div>
       </section>
+      {selectedProperty && <PropertyRulesModal property={selectedProperty} state={state} teamId={teamId} busy={busy} act={act} onClose={() => setSelectedProperty(null)} />}
       {selectedPublicTask && <PublicTaskModal key={selectedPublicTask.id} task={selectedPublicTask} state={state} teamId={teamId} busy={busy} act={act} blockedBy={myActivePublic?.taskId !== selectedPublicTask.id ? myActivePublic?.taskId : undefined} onClose={() => setSelectedPublicTask(null)} />}
     </div>
   );
+}
+
+function PropertyRulesModal({ property, state, teamId, busy, act, onClose }: {
+  property: PropertyDefinition;
+  state: GameState;
+  teamId: TeamId;
+  busy: boolean;
+  act: ActionFn;
+  onClose: () => void;
+}) {
+  const attempts = state.propertyAttempts ?? [];
+  const propertyAttempts = attempts.filter((attempt) => attempt.propertyId === property.id);
+  const successfulTimes = propertyAttempts.filter((attempt) => attempt.status === "completed" && attempt.success && attempt.elapsedMs).map((attempt) => attempt.elapsedMs as number);
+  const bestTime = successfulTimes.length > 0 ? Math.min(...successfulTimes) : undefined;
+  const latestAttempt = [...propertyAttempts].reverse().find((attempt) => attempt.teamId === teamId);
+  const running = latestAttempt?.status === "running" ? latestAttempt : undefined;
+  const pendingChallenge = state.challenges.find((challenge) => challenge.teamId === teamId && challenge.status === "pending");
+  const isOwner = state.properties.find((item) => item.id === property.id)?.owner === teamId;
+  const hasReadyResult = latestAttempt?.status === "completed" && latestAttempt.success && !latestAttempt.claimedAt;
+  const canStart = !running && !pendingChallenge && !isOwner && !hasReadyResult;
+  const [now, setNow] = useState(0);
+  const runningId = running?.id ?? "";
+  const runningStartedAt = running?.startedAt ?? "";
+
+  useEffect(() => {
+    if (!runningId) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [runningId]);
+
+  const elapsed = running ? Math.max(0, now - new Date(runningStartedAt).getTime()) : latestAttempt?.elapsedMs;
+  const resultText = latestAttempt?.status === "completed" && latestAttempt.elapsedMs !== undefined
+    ? latestAttempt.success
+      ? latestAttempt.benchmarkMs === undefined
+        ? `完成時間 ${formatChallengeTime(latestAttempt.elapsedMs)}，成功建立首個紀錄。`
+        : `完成時間 ${formatChallengeTime(latestAttempt.elapsedMs)}，成功快過 ${formatChallengeTime(latestAttempt.benchmarkMs)}。`
+      : `完成時間 ${formatChallengeTime(latestAttempt.elapsedMs)}，未能快過 ${formatChallengeTime(latestAttempt.benchmarkMs)}。`
+    : "";
+
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="property-rules-modal" role="dialog" aria-modal="true" aria-labelledby="property-rules-title">
+      <button className="modal-close" onClick={onClose} aria-label="關閉">×</button>
+      <header><span className="card-code">{property.id}</span><div><small>PHYSICAL CHECKPOINT</small><h1 id="property-rules-title">{property.title}</h1><p>{property.game}</p></div></header>
+      <div className="property-record-rule"><b>⏱ 計時挑戰規則</b><p>{PROPERTY_CHALLENGE_RULE}</p><small>Web App 會用伺服器時間自動判定；工作員同步將隊名及時間寫入實體表作現場後備。</small></div>
+      <section className="property-materials"><h2>物資</h2><div>{property.materials.map((item) => <span key={item}>▣ {item}</span>)}</div></section>
+      <section className="rules-box"><h2>點玩</h2><ol>{property.rules.map((rule, index) => <li key={rule}><span>{index + 1}</span>{rule}</li>)}</ol><div className="success-rule"><b>成功條件</b>{property.success}</div></section>
+      <section className={`property-timer ${running ? "running" : latestAttempt?.success ? "passed" : latestAttempt?.status === "completed" ? "failed" : ""}`} aria-live="polite">
+        <div className="time-target"><small>TIME TO BEAT</small><b>{bestTime === undefined ? "首隊完成即可" : formatChallengeTime(bestTime)}</b></div>
+        <div className="live-time"><small>{running ? "計時中" : latestAttempt?.elapsedMs !== undefined ? "你隊最近時間" : "準備好先開始"}</small><strong>{elapsed === undefined ? "0:00.0" : formatChallengeTime(elapsed)}</strong></div>
+        {resultText && <p>{latestAttempt?.success ? "✓" : "×"} {resultText}</p>}
+        {hasReadyResult && <div className="timer-next-step">✓ 已取得資格：返回挑戰頁選擇資源，再按「提交佔領申請」。</div>}
+        {pendingChallenge && <div className="timer-next-step">⌛ 你隊已有 {pendingChallenge.propertyId} 等待 GM 確認。</div>}
+        {isOwner && <div className="timer-next-step">✓ 這個生產點已屬於你隊。</div>}
+        {running ? <button className="timer-stop" disabled={busy} onClick={() => void act("finishPropertyTimer", { propertyId: property.id })}>完成挑戰・停止計時</button> : <button className="timer-start" disabled={busy || !canStart} onClick={() => void act("startPropertyTimer", { propertyId: property.id })}>{latestAttempt?.status === "completed" && !latestAttempt.success ? "重新開始計時" : "全隊準備好・開始計時"}</button>}
+      </section>
+      <button className="challenge-button property-modal-close" onClick={onClose}>明白玩法・返回挑戰頁</button>
+    </section>
+  </div>;
 }
 
 function publicPromptIndex(seed: string, length: number) {
@@ -1063,7 +1143,7 @@ function GMApprovals({ state, busy, act }: { state: GameState; busy: boolean; ac
   const taskPending = auctionSubmissions.length + jointSubmissions.length + submissions.length;
   return <div className="content-stack">
     <PageTitle eyebrow="GM ADJUDICATION" title="挑戰與任務審批" text="只按現場觀察裁決；業權放棄、交貨扣款、競投、聯合合約及任務獎勵會由系統原子處理。" action={<div className="pending-total">{challenges.length + publicClaims.length + lunchSubmissions.length + taskPending} 待處理</div>} />
-    <section><div className="section-heading"><div><span>MORNING CLAIMS</span><h2>生產點挑戰</h2></div></div><div className="approval-list">{challenges.length === 0 && <div className="empty-state">未有等待裁決的佔領挑戰。</div>}{challenges.map((challenge) => { const property = state.properties.find((item) => item.id === challenge.propertyId); return <article className="approval-card" key={challenge.id}><div className="approval-code">{challenge.propertyId}</div><div><small>{formatTime(challenge.createdAt)}・{property?.owner ? `目前由 ${displayTeamName(state, property.owner)} 持有` : "中立生產點"}</small><h3>{displayTeamName(state, challenge.teamId)} 挑戰「{property?.title}」</h3><p>勝出後生產 <b style={{ color: RESOURCES[challenge.resource].color }}>{RESOURCES[challenge.resource].name}</b>{challenge.abandonPropertyId ? `，並放棄 ${challenge.abandonPropertyId}` : ""}</p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveChallenge", { challengeId: challenge.id, won: false })}>挑戰失敗</button><button className="approve" disabled={busy} onClick={() => void act("resolveChallenge", { challengeId: challenge.id, won: true })}>確認佔領</button></div></article>; })}</div></section>
+    <section><div className="section-heading"><div><span>MORNING CLAIMS</span><h2>生產點挑戰</h2></div></div><div className="approval-list">{challenges.length === 0 && <div className="empty-state">未有等待裁決的佔領挑戰。</div>}{challenges.map((challenge) => { const property = state.properties.find((item) => item.id === challenge.propertyId); return <article className="approval-card" key={challenge.id}><div className="approval-code">{challenge.propertyId}</div><div><small>{formatTime(challenge.createdAt)}・{property?.owner ? `目前由 ${displayTeamName(state, property.owner)} 持有` : "中立生產點"}{challenge.elapsedMs !== undefined ? `・成績 ${formatChallengeTime(challenge.elapsedMs)}` : ""}</small><h3>{displayTeamName(state, challenge.teamId)} 挑戰「{property?.title}」</h3><p>{challenge.elapsedMs !== undefined && <><b>{challenge.benchmarkMs === undefined ? "首隊建立紀錄" : `快過當時紀錄 ${formatChallengeTime(challenge.benchmarkMs)}`}</b>・</>}勝出後生產 <b style={{ color: RESOURCES[challenge.resource].color }}>{RESOURCES[challenge.resource].name}</b>{challenge.abandonPropertyId ? `，並放棄 ${challenge.abandonPropertyId}` : ""}</p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveChallenge", { challengeId: challenge.id, won: false })}>挑戰失敗</button><button className="approve" disabled={busy} onClick={() => void act("resolveChallenge", { challengeId: challenge.id, won: true })}>確認佔領</button></div></article>; })}</div></section>
     <section><div className="section-heading"><div><span>PUBLIC TASKS</span><h2>公共任務審批</h2></div><small>每組每項最多完成一次</small></div><div className="approval-list">{publicClaims.length === 0 && <div className="empty-state">未有公共任務等待裁決。</div>}{publicClaims.map((claim) => { const task = PUBLIC_TASKS.find((item) => item.id === claim.taskId); const prompt = task ? task.prompts[claim.promptIndex ?? publicPromptIndex(claim.id, task.prompts.length)] : null; return <article className="approval-card" key={claim.id}><div className="approval-code">{claim.taskId}</div><div><small>{formatTime(claim.createdAt)}・各隊獨立完成</small><h3>{displayTeamName(state, claim.teamId)}：{task?.title}</h3><p>本隊題目：<b>{prompt?.title ?? "—"}</b><br />通過後一次性生產 <b style={{ color: task ? RESOURCES[task.reward].color : undefined }}>{task ? `${RESOURCES[task.reward].name} ×1` : "資源"}</b></p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolvePublicTask", { claimId: claim.id, approved: false })}>未完成・可重做</button><button className="approve" disabled={busy} onClick={() => void act("resolvePublicTask", { claimId: claim.id, approved: true })}>通過＋生產</button></div></article>; })}</div></section>
     <section><div className="section-heading"><div><span>LUNCH DELIVERIES</span><h2>午餐合約收貨</h2></div><small>確認時先扣資源及付款</small></div><div className="approval-list">{lunchSubmissions.length === 0 && <div className="empty-state">未有午餐合約等待收貨。</div>}{lunchSubmissions.map((claim) => { const contract = LUNCH_CONTRACTS.find((item) => item.id === claim.contractId); return <article className="approval-card" key={claim.id}><div className="approval-code">{claim.contractId}</div><div><small>{claim.submittedAt ? formatTime(claim.submittedAt) : ""}・先到先得合約</small><h3>{displayTeamName(state, claim.teamId)}：{contract?.title}</h3><p>交貨 <b>{describeResources(claim.resources)}</b>・應付 <b className="money">${contract?.cash ?? 0}</b></p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveLunchContract", { claimId: claim.id, approved: false })}>退回補貨</button><button className="approve" disabled={busy} onClick={() => void act("resolveLunchContract", { claimId: claim.id, approved: true })}>確認收貨＋付款</button></div></article>; })}</div></section>
     <section><div className="section-heading"><div><span>SEALED AUCTION</span><h2>C2 泊位密封競投</h2></div><button className="small-action" disabled={busy || auctionSubmissions.length === 0} onClick={() => { if (window.confirm(`確定揭開 ${auctionSubmissions.length} 份出價並立即結算？`)) void act("resolveAuction"); }}>揭標結算</button></div><div className="approval-list">{auctionSubmissions.length === 0 && <div className="empty-state">未有密封出價。</div>}{auctionSubmissions.map((run) => <article className="approval-card" key={run.id}><div className="approval-code">C2</div><div><small>{run.submittedAt ? formatTime(run.submittedAt) : ""}・密封至GM揭標</small><h3>{displayTeamName(state, run.teamId)} 出價 <span className="money">${run.bid ?? 0}</span></h3><p>勝出預選：{run.auctionReward ? describeResources(run.auctionReward) : "—"}</p></div><div className="approval-actions"><button className="reject" disabled={busy} onClick={() => void act("resolveTask", { runId: run.id, approved: false })}>退回改價</button></div></article>)}</div></section>
@@ -1080,7 +1160,7 @@ function GMAssets({ state, busy, act }: { state: GameState; busy: boolean; act: 
     <PageTitle eyebrow="ECONOMY CONTROL" title="資產與市場" text="處理午膳合約、特殊獎勵或現場更正。所有手動調整都會寫入活動紀錄。" />
     <section className="manual-adjust"><label>隊伍<select value={adjustTeam} onChange={(event) => setAdjustTeam(event.target.value as TeamId)}>{(Object.keys(TEAMS) as TeamId[]).map((id) => <option key={id} value={id}>{displayTeamName(state, id)}</option>)}</select></label><label>資產<select value={target} onChange={(event) => setTarget(event.target.value as "cash" | ResourceKey)}><option value="cash">現金</option>{RESOURCE_KEYS.map((key) => <option key={key} value={key}>{RESOURCES[key].name}</option>)}</select></label><label>數量<input type="number" min="-20" max="20" value={delta} onChange={(event) => setDelta(Number(event.target.value))} /></label><button disabled={busy || delta === 0} onClick={() => void act("adjustTeam", { teamId: adjustTeam, target, delta })}>確認調整</button></section>
     <section><div className="section-heading"><div><span>TEAM INVENTORY</span><h2>公開資產表</h2></div></div><div className="asset-table"><div className="asset-row header"><span>隊伍</span><span>現金</span>{RESOURCE_KEYS.map((key) => <span key={key}>{RESOURCES[key].name}</span>)}<span>業權</span><span>認證</span></div>{(Object.keys(TEAMS) as TeamId[]).map((id) => <div className="asset-row" key={id}><b style={{ color: TEAMS[id].color }}>⚑ {displayTeamName(state, id)}</b><strong>${state.teams[id].cash}</strong>{RESOURCE_KEYS.map((key) => <span key={key} style={{ color: RESOURCES[key].color }}>{RESOURCES[key].icon} {state.teams[id].resources[key]}</span>)}<span>{state.properties.filter((item) => item.owner === id).map((item) => item.id).join(", ") || "—"}</span><span>{state.teams[id].projects.length}/4</span></div>)}</div></section>
-    <section><div className="section-heading"><div><span>PROPERTIES</span><h2>六個生產點</h2></div><button className="small-action" disabled={busy} onClick={() => void act("runProduction")}>結算下一輪</button></div><div className="property-status-grid">{state.properties.map((property) => <article key={property.id}><span>{property.id}</span><div><b>{property.title}</b><small>{property.owner ? displayTeamName(state, property.owner) : "中立"}</small></div><strong style={{ color: property.resource ? RESOURCES[property.resource].color : "#71869a" }}>{property.resource ? `${RESOURCES[property.resource].icon} ${RESOURCES[property.resource].name}` : "不生產"}</strong>{property.skipNext && <i>下輪停產</i>}</article>)}</div></section>
+    <section><div className="section-heading"><div><span>PROPERTIES</span><h2>六個生產點</h2></div><div className="section-actions"><a className="small-action" href="/p1-p6-challenge-record.pdf" target="_blank" rel="noreferrer">列印實體紀錄表</a><button className="small-action" disabled={busy} onClick={() => void act("runProduction")}>結算下一輪</button></div></div><div className="property-status-grid">{state.properties.map((property) => <article key={property.id}><span>{property.id}</span><div><b>{property.title}</b><small>{property.owner ? displayTeamName(state, property.owner) : "中立"}</small></div><strong style={{ color: property.resource ? RESOURCES[property.resource].color : "#71869a" }}>{property.resource ? `${RESOURCES[property.resource].icon} ${RESOURCES[property.resource].name}` : "不生產"}</strong>{property.skipNext && <i>下輪停產</i>}</article>)}</div></section>
     <section><div className="section-heading"><div><span>OFFICIAL PRICES</span><h2>市場價格</h2></div></div><div className="price-controls">{RESOURCE_KEYS.map((key) => <div key={key}><span style={{ color: RESOURCES[key].color }}>{RESOURCES[key].icon} {RESOURCES[key].name}</span><button disabled={busy || state.prices[key] <= 5} onClick={() => void act("adjustPrice", { resource: key, delta: -1 })}>−</button><b>${state.prices[key]}</b><button disabled={busy || state.prices[key] >= 8} onClick={() => void act("adjustPrice", { resource: key, delta: 1 })}>＋</button></div>)}</div></section>
   </div>;
 }

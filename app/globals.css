@@ -135,6 +135,13 @@ button:disabled { cursor: not-allowed; opacity: .45; filter: saturate(.5); }
 .owner-badge.owned { background: color-mix(in srgb, var(--owner) 16%, #142b3b); color: var(--owner); }
 .property-card h3 { margin: 18px 0 6px; font-size: 20px; }
 .property-card > p { margin: 0; color: var(--muted); min-height: 42px; font-size: 13px; }
+.property-rules-button { width: 100%; margin: 5px 0 4px; padding: 9px 11px; border: 1px solid #2d718e; border-radius: 9px; background: rgba(37,217,245,.07); color: var(--cyan); cursor: pointer; font-weight: 800; font-size: 12px; }
+.section-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+.section-actions a.small-action { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.property-time-to-beat { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; margin: 10px 0; padding: 10px 12px; border: 1px solid rgba(255,210,74,.35); border-radius: 10px; background: rgba(255,210,74,.055); }
+.property-time-to-beat small { color: var(--yellow); font-size: 9px; font-weight: 900; letter-spacing: .12em; }
+.property-time-to-beat b { color: var(--yellow); font-variant-numeric: tabular-nums; }
+.property-time-to-beat span { grid-column: 1 / 3; color: var(--green); font-size: 10px; font-weight: 800; }
 .production-status { min-height: 46px; display: flex; align-items: center; gap: 8px; margin: 14px 0; padding: 10px 12px; background: #061622; border: 1px solid #183a4e; border-radius: 10px; }
 .production-status > span { font-size: 22px; }
 .production-status small { margin-left: auto; color: var(--red); }
@@ -387,6 +394,37 @@ button:disabled { cursor: not-allowed; opacity: .45; filter: saturate(.5); }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(1,8,14,.78); backdrop-filter: blur(8px); overflow-y: auto; }
 .task-modal { position: relative; width: min(760px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; border: 1px solid #32708d; border-radius: 20px; background: linear-gradient(155deg, #0e2a3f, #061622); box-shadow: 0 30px 100px #000; padding: 27px; }
+.property-rules-modal { position: relative; width: min(820px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; display: grid; gap: 15px; border: 1px solid #32708d; border-radius: 20px; background: linear-gradient(155deg, #0e2a3f, #061622); box-shadow: 0 30px 100px #000; padding: 27px; }
+.property-rules-modal > header { display: flex; align-items: center; gap: 15px; padding-right: 45px; }
+.property-rules-modal > header .card-code { flex: 0 0 auto; }
+.property-rules-modal > header small { color: var(--cyan); font-size: 9px; font-weight: 900; letter-spacing: .14em; }
+.property-rules-modal > header h1 { margin: 3px 0; font-size: 32px; }
+.property-rules-modal > header p { margin: 0; color: var(--muted); }
+.property-record-rule { padding: 14px 16px; border-left: 4px solid var(--yellow); background: rgba(255,210,74,.065); }
+.property-record-rule b { color: var(--yellow); }
+.property-record-rule p { margin: 6px 0; color: #d7e3ea; line-height: 1.55; }
+.property-record-rule small { color: var(--muted); }
+.property-materials { padding: 15px; border: 1px solid var(--line); border-radius: 13px; background: rgba(7,24,36,.72); }
+.property-materials h2 { margin: 0 0 10px; font-size: 16px; }
+.property-materials > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.property-materials span { padding: 7px 9px; border: 1px solid #2d5369; border-radius: 8px; color: #bdd0dc; font-size: 11px; }
+.property-timer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 17px; border: 1px solid #31566e; border-radius: 14px; background: #061622; }
+.property-timer.running { border-color: var(--yellow); box-shadow: inset 0 0 25px rgba(255,210,74,.045); }
+.property-timer.passed { border-color: rgba(82,224,164,.55); }
+.property-timer.failed { border-color: rgba(255,77,87,.5); }
+.time-target, .live-time { display: grid; gap: 3px; }
+.time-target small, .live-time small { color: var(--muted); font-size: 9px; font-weight: 900; letter-spacing: .12em; }
+.time-target b { color: var(--yellow); font-size: 24px; font-variant-numeric: tabular-nums; }
+.live-time { text-align: right; }
+.live-time strong { color: var(--cyan); font-size: 34px; font-variant-numeric: tabular-nums; }
+.property-timer.running .live-time strong { color: var(--yellow); }
+.property-timer > p, .timer-next-step { grid-column: 1 / 3; margin: 0; padding: 10px 12px; border-radius: 9px; color: #bed1dc; background: #0b2334; line-height: 1.5; }
+.property-timer.passed > p, .timer-next-step { color: #bff7dc; background: rgba(82,224,164,.08); }
+.property-timer.failed > p { color: #ffc0c4; background: rgba(255,77,87,.08); }
+.timer-start, .timer-stop { grid-column: 1 / 3; min-height: 48px; border: 0; border-radius: 10px; cursor: pointer; font-weight: 900; }
+.timer-start { background: var(--cyan); color: #04101c; }
+.timer-stop { background: var(--red); color: white; }
+.property-modal-close { margin-top: 0; }
 .team-name-editor { position: relative; width: min(440px, 100%); display: grid; grid-template-columns: 58px 1fr; gap: 20px; border: 1px solid #32708d; border-radius: 20px; background: linear-gradient(155deg, #0e2a3f, #061622); box-shadow: 0 30px 100px #000; padding: 28px; }
 .team-name-flag { width: 54px; height: 54px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 14px; background: rgba(255,255,255,.03); font-size: 29px; }
 .team-name-editor small { color: var(--cyan); font-size: 9px; font-weight: 900; letter-spacing: .14em; }
@@ -816,6 +854,12 @@ button:disabled { cursor: not-allowed; opacity: .45; filter: saturate(.5); }
   .resource-icon { font-size: 24px; }
   .resource-card b { font-size: 23px; }
   .property-grid, .compact-grid { grid-template-columns: 1fr; }
+  .property-rules-modal { padding: 22px 16px; }
+  .property-rules-modal > header h1 { font-size: 28px; }
+  .property-timer { grid-template-columns: 1fr; }
+  .property-timer > * { grid-column: 1; }
+  .section-actions { width: 100%; justify-content: stretch; }
+  .section-actions .small-action { flex: 1; }
   .compact-task.public-task { grid-template-columns: 34px minmax(0, 1fr); }
   .compact-task.public-task > button { grid-column: 1 / 3; width: 100%; }
   .rule-banner { display: grid; gap: 6px; }
